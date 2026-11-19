@@ -154,7 +154,8 @@ jobs:
 
       - name: Checks (lint, test, build)
         run: |
-          # shellcheck disable=SC2016  (single quotes are intentional: the command runs later, in its own bash)
+          # The single quotes below are intentional: the command runs later, in its own bash.
+          # shellcheck disable=SC2016
           if [ -z "$CMD_LINT" ]; then
             # Default "lint": every JavaScript file must at least parse, and the site needs a page to serve.
             CMD_LINT='status=0; for f in $(git ls-files -- "*.js" "*.mjs" | grep -v "\.min\.js$"); do node --check "$f" || status=1; done; [ -n "$(git ls-files -- "*.html" | head -n1)" ] || { echo "no .html file in the repo"; status=1; }; exit $status'

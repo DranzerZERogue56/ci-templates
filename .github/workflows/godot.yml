@@ -162,7 +162,8 @@ jobs:
         env:
           GDTOOLKIT_VERSION: "4.5.0"
         run: |
-          # shellcheck disable=SC2016  (single quotes are intentional: the command runs later, in its own bash)
+          # The single quotes below are intentional: the command runs later, in its own bash.
+          # shellcheck disable=SC2016
           # Defaults: "build" = let the editor import the project headless (catches broken scenes and scripts);
           # "lint" = gdlint from gdtoolkit when the repo has .gd files. Tests need a test_command (GUT, gdUnit4, ...).
           [ -n "$CMD_BUILD" ] || CMD_BUILD='"$GODOT" --headless --path . --import'
