@@ -1,0 +1,3 @@
+# Repos the rollout tool must never touch: one repo name per line, "#" starts a comment.
+# Keep this public file free of private repo names. For those, use a local file instead and pass it with
+# --optout PATH, or set the CI_TEMPLATES_OPTOUT environment variable to its path.

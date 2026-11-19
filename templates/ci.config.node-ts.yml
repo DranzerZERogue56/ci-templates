@@ -1,0 +1,15 @@
+# Settings for the standard CI pipeline. Edit this file to change what CI does for THIS repo.
+# Leave a value empty ("") to use the automatic default. Write skip to switch a step off.
+# Values are single-line. Commands run in the repo root with bash.
+# Format: key: value. Lists are JSON-style, and version numbers must be quoted.
+
+language: node-ts            # which pipeline this repo uses; also named in .github/workflows/ci.yml
+versions: ["22", "24"]       # Node versions to test (one build job per version)
+install_command: ""          # auto: npm ci (or pnpm / yarn, from the lockfile)
+typecheck_command: ""        # auto: the "typecheck" script, or tsc --noEmit when tsconfig.json exists
+lint_command: ""             # auto: the "lint" script
+test_command: ""             # auto: the "test" script
+build_command: ""            # auto: the "build" script
+audit: true                  # dependency audit (npm audit / pnpm audit); set false to turn it off
+audit_level: high            # lowest severity that fails the audit: low, moderate, high, critical
+secrets_scan: true           # scan tracked files for keys and tokens

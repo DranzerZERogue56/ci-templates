@@ -1,0 +1,268 @@
+# Reusable workflow: Python.
+# Call it from a repo's own .github/workflows/ci.yml (see templates/ci.yml). Settings are read from
+# the caller's .github/ci.config.yml; anything passed as an input below wins over that file.
+name: Python CI
+
+on:
+  workflow_call:
+    inputs:
+      versions:
+        description: 'Python versions to test, as a JSON list of strings, e.g. ["3.12","3.13"]. Empty = ci.config.yml, then the built-in default.'
+        type: string
+        default: ""
+      install_command:
+        description: 'Install command. Empty = auto.'
+        type: string
+        default: ""
+      typecheck_command:
+        description: 'Typecheck command. Empty = auto, "skip" = off.'
+        type: string
+        default: ""
+      lint_command:
+        description: 'Lint command. Empty = auto, "skip" = off.'
+        type: string
+        default: ""
+      test_command:
+        description: 'Test command. Empty = auto, "skip" = off.'
+        type: string
+        default: ""
+      build_command:
+        description: 'Build command. Empty = auto, "skip" = off.'
+        type: string
+        default: ""
+      audit_level:
+        description: "Lowest severity that fails the dependency audit: low, moderate, high or critical."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    name: Read settings
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      versions: ${{ steps.cfg.outputs.versions }}
+      install_command: ${{ steps.cfg.outputs.install_command }}
+      typecheck_command: ${{ steps.cfg.outputs.typecheck_command }}
+      lint_command: ${{ steps.cfg.outputs.lint_command }}
+      test_command: ${{ steps.cfg.outputs.test_command }}
+      build_command: ${{ steps.cfg.outputs.build_command }}
+      audit_level: ${{ steps.cfg.outputs.audit_level }}
+      audit: ${{ steps.cfg.outputs.audit }}
+      secrets_scan: ${{ steps.cfg.outputs.secrets_scan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read .github/ci.config.yml
+        id: cfg
+        env:
+          DEFAULT_VERSIONS: '["3.12","3.13"]'
+          IN_VERSIONS: ${{ inputs.versions }}
+          IN_INSTALL: ${{ inputs.install_command }}
+          IN_TYPECHECK: ${{ inputs.typecheck_command }}
+          IN_LINT: ${{ inputs.lint_command }}
+          IN_TEST: ${{ inputs.test_command }}
+          IN_BUILD: ${{ inputs.build_command }}
+          IN_AUDIT_LEVEL: ${{ inputs.audit_level }}
+        run: |
+          # cfg NAME INPUT_VALUE BUILT_IN_DEFAULT: caller input, else ci.config.yml, else default. One line only.
+          cfg() {
+            local v="$2"
+            if [ -z "$v" ] && [ -f .github/ci.config.yml ]; then
+              v=$(sed -nE "s/^$1:[[:space:]]*(.*)\$/\1/p" .github/ci.config.yml | head -n1)
+              v=$(printf '%s' "$v" | sed -E "s/[[:space:]]+#.*\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/")
+            fi
+            printf '%s' "${v:-$3}" | head -n1
+          }
+          flag() { case "$(cfg "$1" "" true)" in false|no|off|0) echo false ;; *) echo true ;; esac; }
+
+          versions=$(cfg versions "$IN_VERSIONS" "$DEFAULT_VERSIONS" | jq -c 'map(tostring)' 2>/dev/null || true)
+          if ! printf '%s' "$versions" | jq -e 'type == "array" and length > 0 and all(.[]; test("^[0-9A-Za-z._-]+$"))' >/dev/null 2>&1; then
+            echo '::error title=Bad versions setting::"versions" must be a JSON list of version strings, for example ["22","24"].'
+            exit 1
+          fi
+          level=$(cfg audit_level "$IN_AUDIT_LEVEL" high)
+          case "$level" in low|moderate|high|critical) ;; *) echo "::error title=Bad audit_level::use low, moderate, high or critical"; exit 1 ;; esac
+          {
+            echo "versions=$versions"
+            echo "install_command=$(cfg install_command "$IN_INSTALL" "")"
+            echo "typecheck_command=$(cfg typecheck_command "$IN_TYPECHECK" "")"
+            echo "lint_command=$(cfg lint_command "$IN_LINT" "")"
+            echo "test_command=$(cfg test_command "$IN_TEST" "")"
+            echo "build_command=$(cfg build_command "$IN_BUILD" "")"
+            echo "audit_level=$level"
+            echo "audit=$(flag audit)"
+            echo "secrets_scan=$(flag secrets_scan)"
+          } >> "$GITHUB_OUTPUT"
+
+  secrets:
+    name: Secrets scan
+    needs: config
+    if: needs.config.outputs.secrets_scan == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan tracked files for secret-shaped strings
+        env:
+          PATTERN: '(sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
+        run: |
+          # Only file:line is printed, never the matching text. Put paths to skip (fake test keys) in .github/secrets-ignore.txt.
+          args=()
+          if [ -f .github/secrets-ignore.txt ]; then
+            while IFS= read -r line; do
+              line=${line%$'\r'}
+              case "$line" in ''|'#'*) ;; *) args+=(":(exclude,glob)$line") ;; esac
+            done < .github/secrets-ignore.txt
+          fi
+          hits=$(git ls-files -z -- . "${args[@]}" | xargs -0 grep -InE -e "$PATTERN" 2>/dev/null | cut -d: -f1,2 | sort -u || true)
+          if [ -n "$hits" ]; then
+            printf '%s\n' "$hits"
+            echo "::error title=Possible secret in the repo::The file:line pairs above look like keys or tokens. Remove and rotate them, or list fake test fixtures in .github/secrets-ignore.txt."
+            exit 1
+          fi
+          echo "No secret-shaped strings found."
+
+  build:
+    name: Build (python ${{ matrix.version }})
+    needs: config
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.config.outputs.versions) }}
+    env:
+      CMD_INSTALL: ${{ needs.config.outputs.install_command }}
+      CMD_TYPECHECK: ${{ needs.config.outputs.typecheck_command }}
+      CMD_LINT: ${{ needs.config.outputs.lint_command }}
+      CMD_TEST: ${{ needs.config.outputs.test_command }}
+      CMD_BUILD: ${{ needs.config.outputs.build_command }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect dependency files
+        id: deps
+        run: |
+          if [ -f pyproject.toml ]; then echo "cache_path=pyproject.toml" >> "$GITHUB_OUTPUT"
+          elif ls requirements*.txt >/dev/null 2>&1; then echo "cache_path=requirements*.txt" >> "$GITHUB_OUTPUT"
+          else echo "cache_path=" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.version }}
+          cache: ${{ steps.deps.outputs.cache_path && 'pip' || '' }}
+          cache-dependency-path: ${{ steps.deps.outputs.cache_path }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -n "$CMD_INSTALL" ]; then
+            echo "Running: $CMD_INSTALL"; bash -c "$CMD_INSTALL"
+          else
+            found=0
+            if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; found=1; fi
+            if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt; found=1; fi
+            if [ -f pyproject.toml ] && grep -q '^\[project\]' pyproject.toml; then
+              python -m pip install -e ".[dev]"; found=1
+            fi
+            if [ "$found" = 0 ]; then
+              echo "::notice title=Nothing to install::No requirements.txt, requirements-dev.txt or [project] table in pyproject.toml. Set install_command in .github/ci.config.yml if the project needs one."
+            fi
+          fi
+
+      - name: Checks (typecheck, lint, test, build)
+        run: |
+          # Auto-detection only picks a tool that is actually installed, so a missing tool is a visible skip, not a failure.
+          has_mod() { python -c "import $1" >/dev/null 2>&1; }
+          if [ -z "$CMD_LINT" ] && has_mod ruff; then CMD_LINT="python -m ruff check ."; fi
+          if [ -z "$CMD_TYPECHECK" ] && has_mod mypy && { [ -f mypy.ini ] || grep -qs 'tool.mypy\|^\[mypy' pyproject.toml setup.cfg; }; then CMD_TYPECHECK="python -m mypy ."; fi
+          if [ -z "$CMD_TEST" ]; then
+            tests=$(git ls-files -- 'test_*.py' '*_test.py' '**/test_*.py' '**/*_test.py' | head -n1)
+            if [ -n "$tests" ]; then
+              if has_mod pytest; then CMD_TEST="python -m pytest"; else CMD_TEST="python -m unittest discover"; fi
+            fi
+          fi
+          # Default build = byte-compile every file, a cheap syntax check that always applies to Python.
+          [ -n "$CMD_BUILD" ] || CMD_BUILD="python -m compileall -q ."
+
+          fail=0
+          summary() { printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"; }
+          run_stage() { # LABEL COMMAND   (COMMAND empty = nothing found, "skip" = switched off)
+            local label="$1" cmd="$2"
+            case "$cmd" in
+              '') echo "::notice title=$label skipped::Nothing to run for $label (no matching script or tool found). Set ${label}_command in .github/ci.config.yml to add one."
+                  summary "- SKIPPED **$label**: nothing to run"; return ;;
+              skip) echo "::notice title=$label skipped::$label is switched off in the CI settings."
+                  summary "- SKIPPED **$label**: switched off in settings"; return ;;
+            esac
+            echo "::group::$label: $cmd"
+            if bash -c "$cmd"; then summary "- PASS **$label**"; else fail=1; echo "::error title=$label failed::$label failed, see the log above."; summary "- FAIL **$label**"; fi
+            echo "::endgroup::"
+          }
+          run_stage typecheck "$CMD_TYPECHECK"
+          run_stage lint "$CMD_LINT"
+          run_stage test "$CMD_TEST"
+          run_stage build "$CMD_BUILD"
+          exit "$fail"
+
+  audit:
+    name: Dependency audit
+    needs: config
+    if: needs.config.outputs.audit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PIP_AUDIT_VERSION: "2.10.1"
+      AUDIT_LEVEL: ${{ needs.config.outputs.audit_level }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      # The tool lives in its own throwaway virtualenv, apart from the project and its test environment.
+      - name: Install pip-audit
+        run: |
+          python -m venv "$RUNNER_TEMP/audit-venv"
+          "$RUNNER_TEMP/audit-venv/bin/python" -m pip install --quiet "pip-audit==${PIP_AUDIT_VERSION}"
+
+      # pip-audit has no severity filter: any known vulnerability in a pinned or resolved dependency fails the job.
+      - name: Audit dependencies
+        run: |
+          audit="$RUNNER_TEMP/audit-venv/bin/pip-audit"
+          ran=0
+          for f in requirements*.txt; do
+            [ -f "$f" ] || continue
+            "$audit" -r "$f" || exit 1
+            ran=1
+          done
+          if [ "$ran" = 0 ] && [ -f pyproject.toml ] && grep -q '^\[project\]' pyproject.toml; then
+            "$audit" . || exit 1
+            ran=1
+          fi
+          if [ "$ran" = 0 ]; then
+            echo "::warning title=Audit not run::No requirements*.txt and no [project] table in pyproject.toml, so there is nothing to audit."
+            echo "- Dependency audit NOT RUN: no dependency file" >> "$GITHUB_STEP_SUMMARY"
+          fi

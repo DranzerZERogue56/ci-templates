@@ -1,0 +1,13 @@
+# Settings for the standard CI pipeline. Edit this file to change what CI does for THIS repo.
+# Leave a value empty ("") to use the automatic default. Write skip to switch a step off.
+# Values are single-line. Commands run in the repo root with bash.
+# Format: key: value. Lists are JSON-style, and version numbers must be quoted.
+
+language: static-site        # which pipeline this repo uses; also named in .github/workflows/ci.yml
+versions: ["24"]             # Node version used for the checks
+install_command: ""          # auto: npm ci when package-lock.json exists, else nothing
+lint_command: ""             # auto: every .js file must parse, and the repo needs an .html file
+test_command: ""             # auto: the "test" script, if there is a package.json
+build_command: ""            # auto: the "build" script, if there is a package.json
+audit: true                  # dependency audit (OSV-Scanner); false turns it off
+secrets_scan: true           # scan tracked files for keys and tokens

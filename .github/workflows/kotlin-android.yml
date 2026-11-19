@@ -1,0 +1,222 @@
+# Reusable workflow: Kotlin / Android (Gradle).
+# Call it from a repo's own .github/workflows/ci.yml (see templates/ci.yml). Settings are read from
+# the caller's .github/ci.config.yml; anything passed as an input below wins over that file.
+name: Kotlin / Android (Gradle) CI
+
+on:
+  workflow_call:
+    inputs:
+      versions:
+        description: 'JDK versions to test, as a JSON list of strings, e.g. ["17"]. Empty = ci.config.yml, then the built-in default.'
+        type: string
+        default: ""
+      lint_command:
+        description: 'Lint command. Empty = auto, "skip" = off.'
+        type: string
+        default: ""
+      test_command:
+        description: 'Test command. Empty = auto, "skip" = off.'
+        type: string
+        default: ""
+      build_command:
+        description: 'Build command. Empty = auto, "skip" = off.'
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    name: Read settings
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      versions: ${{ steps.cfg.outputs.versions }}
+      lint_command: ${{ steps.cfg.outputs.lint_command }}
+      test_command: ${{ steps.cfg.outputs.test_command }}
+      build_command: ${{ steps.cfg.outputs.build_command }}
+      audit: ${{ steps.cfg.outputs.audit }}
+      secrets_scan: ${{ steps.cfg.outputs.secrets_scan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read .github/ci.config.yml
+        id: cfg
+        env:
+          DEFAULT_VERSIONS: '["17"]'
+          IN_VERSIONS: ${{ inputs.versions }}
+          IN_LINT: ${{ inputs.lint_command }}
+          IN_TEST: ${{ inputs.test_command }}
+          IN_BUILD: ${{ inputs.build_command }}
+        run: |
+          # cfg NAME INPUT_VALUE BUILT_IN_DEFAULT: caller input, else ci.config.yml, else default. One line only.
+          cfg() {
+            local v="$2"
+            if [ -z "$v" ] && [ -f .github/ci.config.yml ]; then
+              v=$(sed -nE "s/^$1:[[:space:]]*(.*)\$/\1/p" .github/ci.config.yml | head -n1)
+              v=$(printf '%s' "$v" | sed -E "s/[[:space:]]+#.*\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/")
+            fi
+            printf '%s' "${v:-$3}" | head -n1
+          }
+          flag() { case "$(cfg "$1" "" true)" in false|no|off|0) echo false ;; *) echo true ;; esac; }
+
+          versions=$(cfg versions "$IN_VERSIONS" "$DEFAULT_VERSIONS" | jq -c 'map(tostring)' 2>/dev/null || true)
+          if ! printf '%s' "$versions" | jq -e 'type == "array" and length > 0 and all(.[]; test("^[0-9A-Za-z._-]+$"))' >/dev/null 2>&1; then
+            echo '::error title=Bad versions setting::"versions" must be a JSON list of version strings, for example ["22","24"].'
+            exit 1
+          fi
+          {
+            echo "versions=$versions"
+            echo "lint_command=$(cfg lint_command "$IN_LINT" "")"
+            echo "test_command=$(cfg test_command "$IN_TEST" "")"
+            echo "build_command=$(cfg build_command "$IN_BUILD" "")"
+            echo "audit=$(flag audit)"
+            echo "secrets_scan=$(flag secrets_scan)"
+          } >> "$GITHUB_OUTPUT"
+
+  secrets:
+    name: Secrets scan
+    needs: config
+    if: needs.config.outputs.secrets_scan == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan tracked files for secret-shaped strings
+        env:
+          PATTERN: '(sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
+        run: |
+          # Only file:line is printed, never the matching text. Put paths to skip (fake test keys) in .github/secrets-ignore.txt.
+          args=()
+          if [ -f .github/secrets-ignore.txt ]; then
+            while IFS= read -r line; do
+              line=${line%$'\r'}
+              case "$line" in ''|'#'*) ;; *) args+=(":(exclude,glob)$line") ;; esac
+            done < .github/secrets-ignore.txt
+          fi
+          hits=$(git ls-files -z -- . "${args[@]}" | xargs -0 grep -InE -e "$PATTERN" 2>/dev/null | cut -d: -f1,2 | sort -u || true)
+          if [ -n "$hits" ]; then
+            printf '%s\n' "$hits"
+            echo "::error title=Possible secret in the repo::The file:line pairs above look like keys or tokens. Remove and rotate them, or list fake test fixtures in .github/secrets-ignore.txt."
+            exit 1
+          fi
+          echo "No secret-shaped strings found."
+
+  build:
+    name: Build (JDK ${{ matrix.version }})
+    needs: config
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.config.outputs.versions) }}
+    env:
+      CMD_LINT: ${{ needs.config.outputs.lint_command }}
+      CMD_TEST: ${{ needs.config.outputs.test_command }}
+      CMD_BUILD: ${{ needs.config.outputs.build_command }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check for the Gradle wrapper
+        id: wrapper
+        run: |
+          if [ -f gradlew ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=No Gradle wrapper::gradlew is missing, so nothing was built. Commit the Gradle wrapper (gradle wrapper) so CI can build the project."
+            echo "- Build NOT RUN: no gradlew in the repo" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Refuses a tampered gradle-wrapper.jar before it is ever executed.
+      - uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        if: steps.wrapper.outputs.present == 'true'
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        if: steps.wrapper.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.version }}
+          cache: gradle
+
+      - name: Checks (lint, test, build)
+        if: steps.wrapper.outputs.present == 'true'
+        run: |
+          chmod +x gradlew
+          if grep -qsE 'com\.android' -- build.gradle build.gradle.kts */build.gradle */build.gradle.kts; then
+            [ -n "$CMD_LINT" ] || CMD_LINT="./gradlew lintDebug"
+            [ -n "$CMD_TEST" ] || CMD_TEST="./gradlew testDebugUnitTest"
+            [ -n "$CMD_BUILD" ] || CMD_BUILD="./gradlew assembleDebug"
+          else
+            [ -n "$CMD_TEST" ] || CMD_TEST="./gradlew test"
+            [ -n "$CMD_BUILD" ] || CMD_BUILD="./gradlew assemble"
+          fi
+
+          fail=0
+          summary() { printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"; }
+          run_stage() { # LABEL COMMAND   (COMMAND empty = nothing found, "skip" = switched off)
+            local label="$1" cmd="$2"
+            case "$cmd" in
+              '') echo "::notice title=$label skipped::Nothing to run for $label (no matching script or tool found). Set ${label}_command in .github/ci.config.yml to add one."
+                  summary "- SKIPPED **$label**: nothing to run"; return ;;
+              skip) echo "::notice title=$label skipped::$label is switched off in the CI settings."
+                  summary "- SKIPPED **$label**: switched off in settings"; return ;;
+            esac
+            echo "::group::$label: $cmd"
+            if bash -c "$cmd"; then summary "- PASS **$label**"; else fail=1; echo "::error title=$label failed::$label failed, see the log above."; summary "- FAIL **$label**"; fi
+            echo "::endgroup::"
+          }
+          run_stage lint "$CMD_LINT"
+          run_stage test "$CMD_TEST"
+          run_stage build "$CMD_BUILD"
+          exit "$fail"
+
+  audit:
+    name: Dependency audit
+    needs: config
+    if: needs.config.outputs.audit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # OSV-Scanner reads lockfiles (package-lock.json, requirements.txt, gradle.lockfile, ...) and checks them
+      # against the OSV vulnerability database. The binary is pinned and its SHA-256 is verified before it runs.
+      - name: Install OSV-Scanner (checksum verified)
+        env:
+          OSV_VERSION: v2.7.1
+          OSV_SHA256: fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/osv-scanner" "https://github.com/google/osv-scanner/releases/download/${OSV_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+
+      - name: Audit dependencies
+        run: |
+          rc=0
+          "$RUNNER_TEMP/osv-scanner" scan source -r . || rc=$?
+          if [ "$rc" -eq 128 ]; then
+            echo "::warning title=Audit found nothing to check::No lockfile or dependency manifest that OSV-Scanner understands was found, so nothing was audited. Commit a lockfile to turn the audit on."
+            echo "- Dependency audit NOT RUN: no supported lockfile" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$rc"

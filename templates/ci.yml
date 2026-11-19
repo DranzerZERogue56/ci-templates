@@ -1,0 +1,18 @@
+# Standard CI for this repo, from the shared ci-templates pipeline. Do not edit the steps here:
+# change this repo's settings in .github/ci.config.yml, or change the pipeline itself in ci-templates.
+# To update: Dependabot proposes a new tag for the line below (see dependabot.yml), or change the tag after @ by hand.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: ["{{DEFAULT_BRANCH}}"]
+  schedule:
+    - cron: "{{CRON}}" # weekly, so new security advisories show up without a code change
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  ci:
+    uses: {{OWNER}}/ci-templates/.github/workflows/{{WORKFLOW}}.yml@{{TAG}}

@@ -1,0 +1,12 @@
+# Settings for the standard CI pipeline. Edit this file to change what CI does for THIS repo.
+# Leave a value empty ("") to use the automatic default. Write skip to switch a step off.
+# Values are single-line. Commands run in the repo root with bash.
+# Format: key: value. Lists are JSON-style, and version numbers must be quoted.
+
+language: godot              # which pipeline this repo uses; also named in .github/workflows/ci.yml
+versions: ["4.7.2-stable"]   # Godot release names to test with
+lint_command: ""             # auto: gdlint when the repo has .gd files
+test_command: ""             # no default: set it for GUT or gdUnit4, e.g. "$GODOT --headless -s addons/gut/gut_cmdln.gd"
+build_command: ""            # auto: open the project headless and import it (catches broken scenes and scripts)
+audit: true                  # dependency audit (OSV-Scanner); false turns it off
+secrets_scan: true           # scan tracked files for keys and tokens

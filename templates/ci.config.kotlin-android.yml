@@ -1,0 +1,12 @@
+# Settings for the standard CI pipeline. Edit this file to change what CI does for THIS repo.
+# Leave a value empty ("") to use the automatic default. Write skip to switch a step off.
+# Values are single-line. Commands run in the repo root with bash.
+# Format: key: value. Lists are JSON-style, and version numbers must be quoted.
+
+language: kotlin-android     # which pipeline this repo uses; also named in .github/workflows/ci.yml
+versions: ["17"]             # JDK versions to build with
+lint_command: ""             # auto: ./gradlew lintDebug (Android) or nothing
+test_command: ""             # auto: ./gradlew testDebugUnitTest (Android) or ./gradlew test
+build_command: ""            # auto: ./gradlew assembleDebug (Android) or ./gradlew assemble
+audit: true                  # dependency audit (OSV-Scanner, needs a Gradle lockfile); false turns it off
+secrets_scan: true           # scan tracked files for keys and tokens

@@ -1,0 +1,6 @@
+# Proposes updates as pull requests; nothing merges by itself. GitHub Actions entries are kept on a
+# pinned tag or commit hash, and Dependabot moves the hash and the version comment together.
+# That includes the ci-templates tag in .github/workflows/ci.yml.
+version: 2
+updates:
+{{ECOSYSTEMS}}

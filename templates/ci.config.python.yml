@@ -1,0 +1,15 @@
+# Settings for the standard CI pipeline. Edit this file to change what CI does for THIS repo.
+# Leave a value empty ("") to use the automatic default. Write skip to switch a step off.
+# Values are single-line. Commands run in the repo root with bash.
+# Format: key: value. Lists are JSON-style, and version numbers must be quoted.
+
+language: python             # which pipeline this repo uses; also named in .github/workflows/ci.yml
+versions: ["3.12", "3.13"]   # Python versions to test (one build job per version)
+install_command: ""          # auto: requirements.txt, requirements-dev.txt, then pip install -e ".[dev]" for pyproject.toml
+typecheck_command: ""        # auto: mypy, only when it is installed and configured
+lint_command: ""             # auto: ruff, only when it is installed
+test_command: ""             # auto: pytest (or unittest) when test files exist
+build_command: ""            # auto: python -m compileall (syntax check of every file)
+audit: true                  # dependency audit (pip-audit); set false to turn it off
+audit_level: high            # kept for symmetry; pip-audit fails on any known vulnerability
+secrets_scan: true           # scan tracked files for keys and tokens
